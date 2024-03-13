@@ -5,33 +5,387 @@ import re
 import copy
 
 
-# class JSONSchema:
+class JSONSchema:
 
-#     def __init__(self, schema: dict | bool, content_by_uid):
-#         assert 
-#         self.content_by_uri = copy.deepcopy(content_by_uid)
+    def __init__(
+        self,
+        schema: dict | bool,
+        schema_by_uri: dict[str, dict] | None = None,
+        parent: "JSONSchema | None" = None,
+        subs: "list[JSONSchema] | None" = None
+    ):
+        self.parent = parent
+        if subs is None:
+            subs = list[JSONSchema]()
+            check_subs = True
+        else:
+            check_subs = False
 
-#         self.keywords = dict[str, Any]()
+        if isinstance(schema, bool):
+            if schema:
+                schema = {}
+            else:
+                schema = {"not": {}}
 
-#         for k, v in schema.items():
+        if parent is None or "$id" in schema:
+            self.root = self
+            self.anchors = dict[str, JSONSchema]()
+            self.dynamic_anchors = dict[str, JSONSchema]()
+        else:
+            self.root = parent.root
+            self.anchors = parent.anchors
+            self.dynamic_anchors = parent.dynamic_anchors
 
+        if parent is None:
+            if schema_by_uri is not None:
+                self.schema_by_uri = copy.deepcopy(schema_by_uri)
+            else:
+                self.schema_by_uri = dict[str, dict]()
+        else:
+            self.schema_by_uri = parent.schema_by_uri
 
-class Validator:
+        subs.append(self)
 
-    def __init__(self, schema: dict | bool, content_by_uid):
-        self.schema = schema
-        self.content_by_uri = copy.deepcopy(content_by_uid)
-        self.dynamic_anchors = dict[str, dict | bool]()
+        self.uri = None
 
-        if isinstance(self.schema, dict):
-            if "$id" in self.schema:
-                self.content_by_uri[self.schema["$id"]] = self.schema
+        if "$id" in schema:
+            uri = schema["$id"]
+            assert isinstance(uri, str)
 
-            for def_sch in self.schema.get("$defs", dict()).values():
-                if isinstance(def_sch, dict) and "$id" in def_sch:
-                    self.content_by_uri[def_sch["$id"]] = def_sch
+            # TODO this is wrong
+            schemas = ("http://", "https://")
+            if not uri.startswith(schemas):
+                p = parent
+                while True:
+                    assert p is not None
+                    root_uri = p.root.uri
+                    if root_uri is not None and root_uri.startswith(schemas):
+                        break
+                    p = p.parent
 
-    def check_type(self, type: str, instance):
+                uri_parts = root_uri.split("/")
+                uri = "/".join(uri_parts[0:-1]) + "/" + uri
+
+            self.schema_by_uri[uri] = schema
+            self.uri = uri
+
+        if "$anchor" in schema:
+            anchor = schema["$anchor"]
+            self.anchors[anchor] = self
+
+        if "$dynamicAnchor" in schema:
+            self.dynamic_anchors[schema["$dynamicAnchor"]] = self
+
+        self.fields = dict[str, Any]()
+
+        for k, v in schema.items():
+            if k in (
+                "if", "then", "else", "not", "contains",
+                "additionalProperties", "items", "unevaluatedItems",
+                "unevaluatedProperties", "propertyNames"
+            ):
+                self.fields[k] = JSONSchema(
+                    schema=v,
+                    parent=self,
+                    subs=subs
+                )
+            elif k in (
+                "allOf", "anyOf", "oneOf", "prefixItems"
+            ):
+                self.fields[k] = [
+                    JSONSchema(
+                        schema=sub_schema,
+                        parent=self,
+                        subs=subs
+                    )
+                    for sub_schema in v
+                ]
+            elif k in (
+                "properties", "patternProperties", "dependentSchemas",
+                "$defs"
+            ):
+                self.fields[k] = {
+                    name: JSONSchema(
+                        schema=sub_schema,
+                        parent=self,
+                        subs=subs
+                    )
+                    for name, sub_schema in v.items()
+                }
+            else:
+                self.fields[k] = v
+
+        if check_subs:
+            for sub in subs:
+                if "$ref" in sub.fields:
+                    ref = self._reference(sub.fields["$ref"], dynamic=False)
+                    assert isinstance(ref, JSONSchema)
+                    sub.fields["$ref"] = ref
+
+    def validate(self, instance, evaluated_properties: set[str] | None = None):
+        if evaluated_properties is None:
+            evaluated_properties = set[str]()
+
+        if "$ref" in self.fields:
+            sub = self.fields["$ref"]
+            assert isinstance(sub, JSONSchema)
+            if not sub.validate(
+                instance=instance,
+                evaluated_properties=evaluated_properties
+            ):
+                return False
+
+        if "$dynamicRef" in self.fields:
+            uri = self.fields["$dynamicRef"]
+            ref = self._reference(uri, dynamic=True)
+            assert isinstance(ref, JSONSchema)
+            if not ref.validate(
+                instance=instance,
+                evaluated_properties=evaluated_properties
+            ):
+                return False
+
+        if "type" in self.fields:
+            _type = self.fields["type"]
+            if isinstance(_type, list):
+                if not any(self._check_type(t, instance) for t in _type):
+                    return False
+            else:
+                if not self._check_type(_type, instance):
+                    return False
+
+        if "not" in self.fields:
+            sub = self.fields["not"]
+            assert isinstance(sub, JSONSchema)
+            if sub.validate(instance):
+                return False
+
+        if "const" in self.fields:
+            if not JSONSchema._compare(instance, self.fields["const"]):
+                return False
+
+        if "oneOf" in self.fields:
+            count = 0
+            for sub in self.fields["oneOf"]:
+                if sub.validate(
+                    instance=instance,
+                    evaluated_properties=evaluated_properties
+                ):
+                    count += 1
+            if count != 1:
+                return False
+
+        if "allOf" in self.fields:
+            for sub in self.fields["allOf"]:
+                if not sub.validate(
+                    instance=instance,
+                    evaluated_properties=evaluated_properties
+                ):
+                    return False
+
+        if "anyOf" in self.fields:
+            count = 0
+            for sub in self.fields["anyOf"]:
+                if sub.validate(
+                    instance=instance,
+                    evaluated_properties=evaluated_properties
+                ):
+                    count += 1
+            if count == 0:
+                return False
+
+        if "if" in self.fields:
+            sub = self.fields["if"]
+            assert isinstance(sub, JSONSchema)
+            result = sub.validate(
+                instance=instance,
+                evaluated_properties=evaluated_properties
+            )
+            if result and "then" in self.fields:
+                sub = self.fields["then"]
+                assert isinstance(sub, JSONSchema)
+                if not sub.validate(
+                    instance=instance,
+                    evaluated_properties=evaluated_properties
+                ):
+                    return False
+                else:
+                    pass
+            if not result and "else" in self.fields:
+                sub = self.fields["else"]
+                assert isinstance(sub, JSONSchema)
+                if not sub.validate(
+                    instance=instance,
+                    evaluated_properties=evaluated_properties
+                ):
+                    return False
+                else:
+                    pass
+
+        if isinstance(instance, numbers.Real):
+            if "minimum" in self.fields and instance < self.fields["minimum"]:
+                return False
+
+            if "maximum" in self.fields and instance > self.fields["maximum"]:
+                return False
+
+            if (
+                "exclusiveMaximum" in self.fields
+                and instance >= self.fields["exclusiveMaximum"]
+            ):
+                return False
+
+            if "multipleOf" in self.fields:
+                multiple = self.fields["multipleOf"]
+                mod = instance % multiple
+                if not (
+                    mod == 0 or (multiple - mod) < 0.00001
+                ):
+                    return False
+
+        if isinstance(instance, list):
+            if "prefixItems" in self.fields:
+                for index, sub in enumerate(self.fields["prefixItems"]):
+                    assert isinstance(sub, JSONSchema)
+                    if index >= len(instance):
+                        break
+                    if not sub.validate(instance[index]):
+                        return False
+
+            if "items" in self.fields:
+                sub = self.fields["items"]
+                assert isinstance(sub, JSONSchema)
+                initial_index = 0
+                if "prefixItems" in self.fields:
+                    initial_index = len(self.fields["prefixItems"])
+
+                if initial_index < len(instance):
+                    for item in instance[initial_index:]:
+                        if not sub.validate(item):
+                            return False
+
+            if (
+                "minItems" in self.fields
+                and len(instance) < self.fields["minItems"]
+            ):
+                return False
+
+            if (
+                "maxItems" in self.fields
+                and len(instance) > self.fields["maxItems"]
+            ):
+                return False
+
+        if isinstance(instance, str):
+            if (
+                "minLength" in self.fields
+                and len(instance) < self.fields["minLength"]
+            ):
+                return False
+
+            if (
+                "maxLength" in self.fields
+                and len(instance) > self.fields["maxLength"]
+            ):
+                return False
+
+            if (
+                "pattern" in self.fields
+                and not re.search(
+                    pattern=self.fields["pattern"],
+                    string=instance
+                )
+            ):
+                return False
+
+        if isinstance(instance, dict):
+            if (
+                "minProperties" in self.fields
+                and len(instance) < self.fields["minProperties"]
+            ):
+                return False
+
+            if (
+                "maxProperties" in self.fields
+                and len(instance) > self.fields["maxProperties"]
+            ):
+                return False
+
+            if "required" in self.fields:
+                for key in self.fields["required"]:
+                    if key not in instance:
+                        return False
+
+            if "dependentSchemas" in self.fields:
+                for prop_name, sub in self.fields["dependentSchemas"].items():
+                    assert isinstance(sub, JSONSchema)
+                    valid = True
+                    if prop_name in instance:
+                        valid &= sub.validate(
+                            instance=instance,
+                            evaluated_properties=evaluated_properties
+                        )
+                    if not valid:
+                        return False
+
+            locally_evaluated_properties = set[str]()
+
+            if "patternProperties" in self.fields:
+                for key in instance:
+                    for pattern, sub in self.fields["patternProperties"].items():
+                        assert isinstance(sub, JSONSchema)
+                        if re.search(
+                            pattern=pattern,
+                            string=key
+                        ):
+                            if not sub.validate(
+                                instance=instance[key],
+                                evaluated_properties=evaluated_properties
+                            ):
+                                return False
+                            locally_evaluated_properties.add(key)
+
+            if "properties" in self.fields:
+                for key, sub in self.fields["properties"].items():
+                    assert isinstance(sub, JSONSchema)
+                    if key in instance:
+                        if not sub.validate(
+                            instance=instance[key],
+                            evaluated_properties=evaluated_properties
+                        ):
+                            return False
+                        locally_evaluated_properties.add(key)
+
+            if "additionalProperties" in self.fields:
+                sub = self.fields["additionalProperties"]
+                assert isinstance(sub, JSONSchema)
+                for key in instance:
+                    if key not in locally_evaluated_properties:
+                        if not sub.validate(
+                            instance=instance[key],
+                            evaluated_properties=evaluated_properties
+                        ):
+                            return False
+                        locally_evaluated_properties.add(key)
+
+            evaluated_properties.update(locally_evaluated_properties)
+
+            if "unevaluatedProperties" in self.fields:
+                sub = self.fields["unevaluatedProperties"]
+                assert isinstance(sub, JSONSchema)
+
+                for key in instance:
+                    if key not in evaluated_properties:
+                        if not sub.validate(
+                            instance=instance[key],
+                            evaluated_properties=evaluated_properties
+                        ):
+                            return False
+                        evaluated_properties.add(key)
+
+        return True
+
+    def _check_type(self, type: str, instance):
         match type:
             case "null":
                 return instance is None
@@ -65,9 +419,111 @@ class Validator:
                         return False
         return False
 
-    def fragment_reference(self, fragment: str) -> dict | bool:
-        def reference0(path: list[str], schema):
+    @staticmethod
+    def _compare(a, b):
+        if (
+            type(a) is bool and type(b) is not bool or
+            type(b) is bool and type(a) is not bool
+        ):
+            return False
+
+        if isinstance(a, list) and isinstance(b, list):
+            if len(a) != len(b):
+                return False
+            for aa, bb in zip(a, b):
+                if not JSONSchema._compare(aa, bb):
+                    return False
+            return True
+        elif isinstance(a, dict) and isinstance(b, dict):
+            if len(a) != len(b):
+                return False
+            for key in a:
+                if key not in b or not JSONSchema._compare(a[key], b[key]):
+                    return False
+            return True
+        else:
+            return a == b
+
+    def _reference(self, uri: str, dynamic: bool) -> "JSONSchema | None":
+        try:
+            fragment_start_index = uri.index("#")
+            fragment = uri[fragment_start_index:]
+            uri = uri[0:fragment_start_index]
+        except ValueError:
+            fragment = None
+
+        schema = None
+
+        if (
+            uri.startswith("http://")
+            or uri.startswith("https://")
+        ):
+            schema = JSONSchema(
+                schema=self.schema_by_uri[uri],
+                parent=self
+            )
+        elif len(uri) > 0:
+            base = self.uri
+            assert isinstance(base, str)
+
+            if uri.startswith("/"):
+                pass
+            else:
+                base_parts = base.split("/")
+                base = "/".join(base_parts[0:-1]) + "/"
+
+            schema = JSONSchema(
+                schema=self.schema_by_uri[base + uri],
+                parent=self
+            )
+        else:
+            schema = self.root
+
+        if fragment is not None:
+            schema = schema._fragment_reference(fragment, dynamic=dynamic)
+
+        return schema
+
+    def _fragment_reference(
+        self,
+        fragment: str,
+        dynamic: bool
+    ) -> "JSONSchema | None":
+        assert fragment.startswith("#")
+        fragment = fragment[1:]
+
+        if not dynamic:
+            if fragment in self.anchors:
+                return self.anchors[fragment]
+            if fragment in self.dynamic_anchors:
+                return self.dynamic_anchors[fragment]
+        else:
+            found = None
+
+            root = self.root
+            while root is not None:
+                if fragment not in root.dynamic_anchors:
+                    break
+
+                found = root.dynamic_anchors[fragment]
+
+                if root.parent is not None:
+                    root = root.parent.root
+                else:
+                    root = None
+
+            if found is not None:
+                return found
+
+            if fragment in self.anchors:
+                return self.anchors[fragment]
+
+        def reference0(
+            path: list[str],
+            schema: JSONSchema | list | dict,
+        ):
             if len(path) == 0:
+                assert isinstance(schema, JSONSchema)
                 return schema
 
             p = path[0]
@@ -93,68 +549,34 @@ class Validator:
             p = "".join(p_unpacked)
 
             if p.isdigit():
+                assert isinstance(schema, list)
                 index = int(p)
                 if index < len(schema):
-                    return reference0(path[1:], schema=schema[index])
+                    return reference0(
+                        path[1:],
+                        schema=schema[index]
+                    )
             else:
-                if p in schema:
-                    return reference0(path[1:], schema=schema[p])
-            return False
+                if isinstance(schema, dict):
+                    if p in schema:
+                        return reference0(
+                            path[1:],
+                            schema=schema[p]
+                        )
+                elif isinstance(schema, JSONSchema):
+                    if p in schema.fields:
+                        return reference0(
+                            path[1:],
+                            schema=schema.fields[p]
+                        )
+            return None
 
-        return reference0(fragment.split("/")[1:], self.schema)
+        return reference0(fragment.split("/")[1:], self)
 
-    def reference(
-        self,
-        uri: str,
-        instance,
-        usedProperties: set[str]
-    ):
-        try:
-            fragment_start_index = uri.index("#")
-            fragment = uri[fragment_start_index:]
-            uri = uri[0:fragment_start_index]
-        except ValueError:
-            fragment = None
 
-        resulting_validator = None
+class Validator:
 
-        if (
-            uri.startswith("http://")
-            or uri.startswith("https://")
-        ):
-            resulting_validator = Validator(
-                schema=self.content_by_uri[uri],
-                content_by_uid=self.content_by_uri
-            )
-        elif len(uri) > 0:
-            assert isinstance(self.schema, dict)
-            base = self.schema["$id"]
-            assert isinstance(base, str)
-
-            if uri.startswith("/"):
-                pass
-            else:
-                base_parts = base.split("/")
-                base = "/".join(base_parts[0:-1]) + "/"
-
-            resulting_validator = Validator(
-                schema=self.content_by_uri[base + uri],
-                content_by_uid=self.content_by_uri
-            )
-        else:
-            resulting_validator = self
-
-        if fragment is not None:
-            schema = resulting_validator.fragment_reference(fragment)
-        else:
-            schema = None
-
-        return resulting_validator.validate(
-            instance=instance,
-            schema=schema,
-            usedProperties=usedProperties
-        )
-
+    
     def validate(
         self, instance,
         schema: dict | bool | None = None,
@@ -170,99 +592,6 @@ class Validator:
         if schema is False:
             return False
 
-        if isinstance(schema, dict) and "$ref" in schema:
-            if not self.reference(
-                uri=schema["$ref"],
-                instance=instance,
-                usedProperties=usedProperties
-            ):
-                return False
-
-        if "prefixItems" in schema and isinstance(instance, list):
-            for index, sch in enumerate(schema["prefixItems"]):
-                if index >= len(instance):
-                    break
-                if not self.validate(
-                    instance=instance[index],
-                    schema=sch
-                ):
-                    return False
-
-        if "type" in schema:
-            _type = schema["type"]
-            if isinstance(_type, list):
-                if not any(self.check_type(t, instance) for t in _type):
-                    return False
-            else:
-                if not self.check_type(_type, instance):
-                    return False
-
-        if "minimum" in schema:
-            if (
-                isinstance(instance, numbers.Real)
-                and instance < schema["minimum"]
-            ):
-                return False
-
-        if "maximum" in schema:
-            if (
-                isinstance(instance, numbers.Real)
-                and instance > schema["maximum"]
-            ):
-                return False
-
-        if "exclusiveMaximum" in schema:
-            if (
-                isinstance(instance, numbers.Real)
-                and instance >= schema["exclusiveMaximum"]
-            ):
-                return False
-
-        if "minLength" in schema:
-            if (
-                isinstance(instance, str)
-                and len(instance) < schema["minLength"]
-            ):
-                return False
-
-        if "maxLength" in schema:
-            if (
-                isinstance(instance, str)
-                and len(instance) > schema["maxLength"]
-            ):
-                return False
-
-        if "minProperties" in schema:
-            if (
-                isinstance(instance, dict)
-                and len(instance) < schema["minProperties"]
-            ):
-                return False
-
-        if "maxProperties" in schema:
-            if (
-                isinstance(instance, dict)
-                and len(instance) > schema["maxProperties"]
-            ):
-                return False
-
-        if "multipleOf" in schema and isinstance(instance, numbers.Real):
-            multiple = schema["multipleOf"]
-            mod = instance % multiple
-            if not (
-                mod == 0 or (multiple - mod) < 0.00001
-            ):
-                return False
-
-        if "items" in schema and isinstance(instance, list):
-            sch = schema["items"]
-            for i in instance:
-                if not self.validate(
-                    instance=i,
-                    schema=sch
-                ):
-                    return False
-
         if "contains" in schema and isinstance(instance, list):
             sch = schema["contains"]
             for i in instance:
@@ -274,73 +603,6 @@ class Validator:
             else:
                 return False
 
-        if isinstance(instance, dict):
-            locallyUsedProperties = set[str]()
-            if "patternProperties" in schema:
-                for pattern, sch in schema["patternProperties"].items():
-                    for key in instance:
-                        if re.search(
-                            pattern=pattern,
-                            string=key
-                        ):
-                            if not self.validate(
-                                instance=instance[key],
-                                schema=sch
-                            ):
-                                return False
-                            locallyUsedProperties.add(key)
-
-            if "properties" in schema:
-                for key, sch in schema["properties"].items():
-                    if key in instance:
-                        if not self.validate(
-                            instance=instance[key],
-                            schema=sch
-                        ):
-                            return False
-                        locallyUsedProperties.add(key)
-
-            if "additionalProperties" in schema:
-                for key in instance:
-                    if key not in locallyUsedProperties:
-                        if not self.validate(
-                            instance=instance[key],
-                            schema=schema["additionalProperties"]
-                        ):
-                            return False
-                        locallyUsedProperties.add(key)
-
-            if "required" in schema:
-                for key in schema["required"]:
-                    if key not in instance:
-                        return False
-
-            usedProperties.update(locallyUsedProperties)
-
-        def compare(a, b):
-            if (
-                type(a) is bool and type(b) is not bool or
-                type(b) is bool and type(a) is not bool
-            ):
-                return False
-
-            if isinstance(a, list) and isinstance(b, list):
-                if len(a) != len(b):
-                    return False
-                for aa, bb in zip(a, b):
-                    if not compare(aa, bb):
-                        return False
-                return True
-            elif isinstance(a, dict) and isinstance(b, dict):
-                if len(a) != len(b):
-                    return False
-                for key in a:
-                    if key not in b or not compare(a[key], b[key]):
-                        return False
-                return True
-            else:
-                return a == b
-
         if "enum" in schema:
             enum: list = schema["enum"]
             if instance not in enum:
@@ -349,103 +611,5 @@ class Validator:
 
             if not compare(instance, val):
                 return False
-
-        if "const" in schema:
-            if not compare(instance, schema["const"]):
-                return False
-
-        if "minItems" in schema:
-            if (
-                isinstance(instance, list)
-                and len(instance) < schema["minItems"]
-            ):
-                return False
-
-        if "maxItems" in schema:
-            if (
-                isinstance(instance, list)
-                and len(instance) > schema["maxItems"]
-            ):
-                return False
-
-        if "oneOf" in schema:
-            count = 0
-            for sch in schema["oneOf"]:
-                if self.validate(
-                    instance=instance,
-                    schema=sch,
-                    usedProperties=usedProperties
-                ):
-                    count += 1
-            if count != 1:
-                return False
-
-        if "allOf" in schema:
-            for sch in schema["allOf"]:
-                if not self.validate(
-                    instance=instance,
-                    schema=sch,
-                    usedProperties=usedProperties
-                ):
-                    return False
-
-        if "anyOf" in schema:
-            count = 0
-            for sch in schema["anyOf"]:
-                if self.validate(
-                    instance=instance,
-                    schema=sch,
-                    usedProperties=usedProperties
-                ):
-                    count += 1
-            if count == 0:
-                return False
-
-        if "dependentSchemas" in schema and isinstance(instance, dict):
-            for prop_name, sch in schema["dependentSchemas"].items():
-                valid = True
-                if prop_name in instance:
-                    valid &= self.validate(
-                        instance=instance,
-                        schema=sch,
-                        usedProperties=usedProperties
-                    )
-                if not valid:
-                    return False
-
-        if "if" in schema:
-            result = self.validate(
-                instance=instance,
-                schema=schema["if"],
-                usedProperties=usedProperties
-            )
-            if result and "then" in schema:
-                if not self.validate(
-                    instance=instance,
-                    schema=schema["then"],
-                    usedProperties=usedProperties
-                ):
-                    return False
-                else:
-                    pass
-            if not result and "else" in schema:
-                if not self.validate(
-                    instance=instance,
-                    schema=schema["else"],
-                    usedProperties=usedProperties
-                ):
-                    return False
-                else:
-                    pass
-
-        if isinstance(instance, dict) and "unevaluatedProperties" in schema:
-            for key in instance:
-                if key not in usedProperties:
-                    if not self.validate(
-                        instance=instance[key],
-                        schema=schema["unevaluatedProperties"]
-                    ):
-                        return False
-                    usedProperties.add(key)
 
         return True
