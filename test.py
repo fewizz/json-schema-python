@@ -4,8 +4,6 @@ import os
 from jsonschema import schema_2020_12
 
 tests_files = [
-    # "type", "boolean_schema", "properties", "required",
-    # "items",
     "boolean_schema",
     "minimum", "maximum", "exclusiveMaximum", "minItems", "maxItems",
     "minLength", "maxLength", "minProperties", "maxProperties", "multipleOf",
@@ -18,10 +16,12 @@ tests_files = [
     "anchor",
     "dynamicRef",
     "unevaluatedProperties",
+    "enum",
     "ref",
+    "content",
     "items", "contains",
     "patternProperties", "additionalProperties", "properties",
-    "required", "enum",
+    "required",
 ]
 
 schema_by_uri = dict()
@@ -33,56 +33,85 @@ for root, dirs, files in os.walk("tests/remotes/"):
 
     base = root.removeprefix("tests/remotes/")
     for remote_file in files:
+        # if remote_file == "urn-ref-string.json":
+        #    continue
+
         with open(f"{root}/{remote_file}") as f:
             data = json.load(f)
-            schema_by_uri[f"http://localhost:1234/{base}{remote_file}"] = data
+            uri = f"http://localhost:1234/{base}{remote_file}"
+            schema_by_uri[uri] = \
+                jsonschema.JSONSchema(schema=data, uri=uri)
+
+schema_by_uri.update(schema_2020_12.schema_by_uri)
+
+
+def test(data):
+    for global_test in data:
+        schema = global_test["schema"]
+        for local_test in global_test["tests"]:
+            js = jsonschema.JSONSchema(
+                schema=schema
+            )
+            result = js.validate(
+                instance=local_test["data"],
+                schema_by_uri=schema_by_uri
+            )
+            assert result == local_test["valid"]
+
+
+for root, dirs, files in os.walk("tests/tests/draft2020-12"):
+    root = root.replace("\\", "/")
+    if not root.endswith("/"):
+        root = f"{root}/"
+
+    # base = root.removeprefix("tests/remotes/")
+    for test_file in files:
+        print(test_file)
+        with open(root + test_file) as f:
+            test(json.load(f))
 
 # for test_file in tests_files:
 #     print(test_file)
 
 #     with open(f"tests/tests/draft2020-12/{test_file}.json") as f:
 #         data = json.load(f)
-
-#         for global_test in data:
-#             schema = global_test["schema"]
-#             for local_test in global_test["tests"]:
-#                 js = jsonschema.JSONSchema(
-#                     schema=schema,
-#                     schema_by_uri=schema_2020_12.schema_by_uri | schema_by_uri
-#                 )
-#                 result = js.validate(instance=local_test["data"])
-#                 assert result == local_test["valid"]
+#         test(data)
 
 
-v = jsonschema.JSONSchema(
-    schema={
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "$id": "https://test.json-schema.org/dynamic-resolution-with-intermediate-scopes/root",
-            "$ref": "intermediate-scope",
-            "$defs": {
-                "foo": {
-                    "$dynamicAnchor": "items",
-                    "type": "string"
-                },
-                "intermediate-scope": {
-                    "$id": "intermediate-scope",
-                    "$ref": "list"
-                },
-                "list": {
-                    "$id": "list",
-                    "type": "array",
-                    "items": { "$dynamicRef": "#items" },
-                    "$defs": {
-                      "items": {
-                          "$comment": "This is only needed to satisfy the bookending requirement",
-                          "$dynamicAnchor": "items"
-                      }
-                    }
-                }
-            }
-        },
-    schema_by_uri=schema_2020_12.schema_by_uri | schema_by_uri
-)
+# v = jsonschema.JSONSchema(
+#     schema={
+#             "$schema": "https://json-schema.org/draft/2020-12/schema",
+#             "$id": "https://test.json-schema.org/relative-dynamic-reference-without-bookend/root",
+#             "$dynamicAnchor": "meta",
+#             "type": "object",
+#             "properties": {
+#                 "foo": { "const": "pass" }
+#             },
+#             "$ref": "extended",
+#             "$defs": {
+#                 "extended": {
+#                     "$id": "extended",
+#                     "$anchor": "meta",
+#                     "type": "object",
+#                     "properties": {
+#                         "bar": { "$ref": "bar" }
+#                     }
+#                 },
+#                 "bar": {
+#                     "$id": "bar",
+#                     "type": "object",
+#                     "properties": {
+#                         "baz": { "$dynamicRef": "extended#meta" }
+#                     }
+#                 }
+#             }
+#         }
+# )
 
-res = v.validate(instance=["foo", 42])
-assert res is False
+# res = v.validate(instance={
+#                     "foo": "pass",
+#                     "bar": {
+#                         "baz": { "foo": "fail" }
+#                     }
+#                 }, schema_by_uri=schema_by_uri)
+# assert res is True

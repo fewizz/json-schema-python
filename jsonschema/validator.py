@@ -2,7 +2,32 @@ from typing import Any
 import numbers
 import math
 import re
-import copy
+import sys
+import itertools
+
+
+class Scope:
+
+    def __init__(
+        self,
+        schema: "JSONSchema",
+        schema_by_uri: dict[str, "JSONSchema"]
+    ):
+        self.schema = schema
+        self.anchors = dict[str, "JSONSchema"]()
+        self.dynamic_anchors = dict[str, "JSONSchema"]()
+        self.schema_by_uri = schema_by_uri
+
+
+class ScopeHandle:
+
+    def __init__(
+        self,
+        current_scope: Scope,
+        previous_scope_handle: "ScopeHandle | None"
+    ):
+        self.current_scope = current_scope
+        self.previous_scope_handle = previous_scope_handle
 
 
 class JSONSchema:
@@ -10,16 +35,10 @@ class JSONSchema:
     def __init__(
         self,
         schema: dict | bool,
-        schema_by_uri: dict[str, dict] | None = None,
         parent: "JSONSchema | None" = None,
-        subs: "list[JSONSchema] | None" = None
+        uri: str | None = None
     ):
         self.parent = parent
-        if subs is None:
-            subs = list[JSONSchema]()
-            check_subs = True
-        else:
-            check_subs = False
 
         if isinstance(schema, bool):
             if schema:
@@ -28,53 +47,46 @@ class JSONSchema:
                 schema = {"not": {}}
 
         if parent is None or "$id" in schema:
-            self.root = self
-            self.anchors = dict[str, JSONSchema]()
-            self.dynamic_anchors = dict[str, JSONSchema]()
-        else:
-            self.root = parent.root
-            self.anchors = parent.anchors
-            self.dynamic_anchors = parent.dynamic_anchors
-
-        if parent is None:
-            if schema_by_uri is not None:
-                self.schema_by_uri = copy.deepcopy(schema_by_uri)
+            if parent is None:
+                schema_by_uri = dict[str, JSONSchema]()
             else:
-                self.schema_by_uri = dict[str, dict]()
+                schema_by_uri = parent.scope.schema_by_uri
+            self.scope = Scope(self, schema_by_uri=schema_by_uri)
         else:
-            self.schema_by_uri = parent.schema_by_uri
+            assert parent is not None
+            self.scope = parent.scope
 
-        subs.append(self)
-
-        self.uri = None
+        self.uri = uri
 
         if "$id" in schema:
             uri = schema["$id"]
             assert isinstance(uri, str)
 
             # TODO this is wrong
-            schemas = ("http://", "https://")
+            schemas = ("http://", "https://", "file://", "urn:")
             if not uri.startswith(schemas):
                 p = parent
                 while True:
                     assert p is not None
-                    root_uri = p.root.uri
+                    root_uri = p.scope.schema.uri
                     if root_uri is not None and root_uri.startswith(schemas):
                         break
                     p = p.parent
 
-                uri_parts = root_uri.split("/")
-                uri = "/".join(uri_parts[0:-1]) + "/" + uri
+                delimiter = ":" if root_uri.startswith("urn:") else "/"
+                uri_parts = root_uri.split(delimiter)
+                uri = delimiter.join(uri_parts[0:-1]) + delimiter + uri
 
-            self.schema_by_uri[uri] = schema
+            self.scope.schema_by_uri[uri] = self
             self.uri = uri
 
         if "$anchor" in schema:
             anchor = schema["$anchor"]
-            self.anchors[anchor] = self
+            self.scope.anchors[anchor] = self
 
         if "$dynamicAnchor" in schema:
-            self.dynamic_anchors[schema["$dynamicAnchor"]] = self
+            anchor = schema["$dynamicAnchor"]
+            self.scope.dynamic_anchors[anchor] = self
 
         self.fields = dict[str, Any]()
 
@@ -86,8 +98,7 @@ class JSONSchema:
             ):
                 self.fields[k] = JSONSchema(
                     schema=v,
-                    parent=self,
-                    subs=subs
+                    parent=self
                 )
             elif k in (
                 "allOf", "anyOf", "oneOf", "prefixItems"
@@ -95,8 +106,7 @@ class JSONSchema:
                 self.fields[k] = [
                     JSONSchema(
                         schema=sub_schema,
-                        parent=self,
-                        subs=subs
+                        parent=self
                     )
                     for sub_schema in v
                 ]
@@ -107,41 +117,93 @@ class JSONSchema:
                 self.fields[k] = {
                     name: JSONSchema(
                         schema=sub_schema,
-                        parent=self,
-                        subs=subs
+                        parent=self
                     )
                     for name, sub_schema in v.items()
                 }
             else:
                 self.fields[k] = v
 
-        if check_subs:
-            for sub in subs:
-                if "$ref" in sub.fields:
-                    ref = self._reference(sub.fields["$ref"], dynamic=False)
-                    assert isinstance(ref, JSONSchema)
-                    sub.fields["$ref"] = ref
+    @staticmethod
+    def _mix_evaluated(func):
+        def _fun(
+            self,
+            instance,
+            schema_by_uri: dict[str, "JSONSchema"],
+            evaluated_props: set[str] | None = None,
+            evaluated_items: set[int] | None = None,
+            previous_scope_handle: ScopeHandle | None = None
+        ):
+            evaluated_props_0 = set[str]()
+            evaluated_items_0 = set[int]()
+            result: bool = func(
+               self,
+               instance,
+               schema_by_uri,
+               evaluated_props_0,
+               evaluated_items_0,
+               previous_scope_handle
+            )
+            if evaluated_props is not None:
+                evaluated_props.update(evaluated_props_0)
+            if evaluated_items is not None:
+                evaluated_items.update(evaluated_items_0)
+                # for i in evaluated_items_0:
+                #    if i not in evaluated_items:
+                #        evaluated_items.append(i)
+            return result
+        return _fun
 
-    def validate(self, instance, evaluated_properties: set[str] | None = None):
-        if evaluated_properties is None:
-            evaluated_properties = set[str]()
+    @_mix_evaluated
+    def validate(
+        self,
+        instance,
+        schema_by_uri: dict[str, "JSONSchema"],
+        evaluated_props: set[str] | None = None,
+        evaluated_items: set[int] | None = None,
+        previous_scope_handle: ScopeHandle | None = None
+    ):
+        assert evaluated_props is not None
+        assert evaluated_items is not None
+
+        scope_handle = ScopeHandle(
+            current_scope=self.scope,
+            previous_scope_handle=previous_scope_handle
+        )
 
         if "$ref" in self.fields:
-            sub = self.fields["$ref"]
-            assert isinstance(sub, JSONSchema)
-            if not sub.validate(
+            uri = self.fields["$ref"]
+            ref = self._reference(
+                uri,
+                schema_by_uri=schema_by_uri,
+                dynamic=False,
+                scope_handle=scope_handle
+            )
+            assert isinstance(ref, JSONSchema)
+            if not ref.validate(
                 instance=instance,
-                evaluated_properties=evaluated_properties
+                schema_by_uri=schema_by_uri,
+                evaluated_props=evaluated_props,
+                evaluated_items=evaluated_items,
+                previous_scope_handle=scope_handle
             ):
                 return False
 
         if "$dynamicRef" in self.fields:
             uri = self.fields["$dynamicRef"]
-            ref = self._reference(uri, dynamic=True)
+            ref = self._reference(
+                uri,
+                schema_by_uri=schema_by_uri,
+                dynamic=True,
+                scope_handle=scope_handle
+            )
             assert isinstance(ref, JSONSchema)
             if not ref.validate(
                 instance=instance,
-                evaluated_properties=evaluated_properties
+                schema_by_uri=schema_by_uri,
+                evaluated_props=evaluated_props,
+                evaluated_items=evaluated_items,
+                previous_scope_handle=scope_handle
             ):
                 return False
 
@@ -157,38 +219,75 @@ class JSONSchema:
         if "not" in self.fields:
             sub = self.fields["not"]
             assert isinstance(sub, JSONSchema)
-            if sub.validate(instance):
+            if sub.validate(
+                instance,
+                schema_by_uri=schema_by_uri,
+                previous_scope_handle=scope_handle
+            ):
                 return False
 
         if "const" in self.fields:
             if not JSONSchema._compare(instance, self.fields["const"]):
                 return False
 
+        if "enum" in self.fields:
+            enum: list = self.fields["enum"]
+            if instance not in enum:
+                return False
+            val = enum[enum.index(instance)]
+
+            if not JSONSchema._compare(instance, val):
+                return False
+
         if "oneOf" in self.fields:
             count = 0
             for sub in self.fields["oneOf"]:
+                assert isinstance(sub, JSONSchema)
+                # locally_evaluated_properties_0 = set[str]()
                 if sub.validate(
                     instance=instance,
-                    evaluated_properties=evaluated_properties
+                    schema_by_uri=schema_by_uri,
+                    evaluated_props=evaluated_props,
+                    evaluated_items=evaluated_items,
+                    previous_scope_handle=scope_handle
                 ):
                     count += 1
+                # if count == 1:
+                #    locally_evaluated_properties.update(
+                #        locally_evaluated_properties
+                #    )
             if count != 1:
                 return False
 
         if "allOf" in self.fields:
-            for sub in self.fields["allOf"]:
-                if not sub.validate(
+            count = 0
+            subs = self.fields["allOf"]
+            for sub in subs:
+                assert isinstance(sub, JSONSchema)
+                # locally_evaluated_properties = set[str]()
+                if sub.validate(
                     instance=instance,
-                    evaluated_properties=evaluated_properties
+                    schema_by_uri=schema_by_uri,
+                    evaluated_props=evaluated_props,
+                    evaluated_items=evaluated_items,
+                    previous_scope_handle=scope_handle
                 ):
-                    return False
+                    count += 1
+                # evaluated_properties.update(locally_evaluated_properties)
+            if count != len(subs):
+                return False
 
         if "anyOf" in self.fields:
             count = 0
             for sub in self.fields["anyOf"]:
+                assert isinstance(sub, JSONSchema)
+                # locally_evaluated_properties_0 = set[str]()
                 if sub.validate(
                     instance=instance,
-                    evaluated_properties=evaluated_properties
+                    schema_by_uri=schema_by_uri,
+                    evaluated_props=evaluated_props,
+                    evaluated_items=evaluated_items,
+                    previous_scope_handle=scope_handle
                 ):
                     count += 1
             if count == 0:
@@ -199,14 +298,20 @@ class JSONSchema:
             assert isinstance(sub, JSONSchema)
             result = sub.validate(
                 instance=instance,
-                evaluated_properties=evaluated_properties
+                schema_by_uri=schema_by_uri,
+                evaluated_props=evaluated_props,
+                evaluated_items=evaluated_items,
+                previous_scope_handle=scope_handle
             )
             if result and "then" in self.fields:
                 sub = self.fields["then"]
                 assert isinstance(sub, JSONSchema)
                 if not sub.validate(
                     instance=instance,
-                    evaluated_properties=evaluated_properties
+                    schema_by_uri=schema_by_uri,
+                    evaluated_props=evaluated_props,
+                    evaluated_items=evaluated_items,
+                    previous_scope_handle=scope_handle
                 ):
                     return False
                 else:
@@ -216,7 +321,10 @@ class JSONSchema:
                 assert isinstance(sub, JSONSchema)
                 if not sub.validate(
                     instance=instance,
-                    evaluated_properties=evaluated_properties
+                    schema_by_uri=schema_by_uri,
+                    evaluated_props=evaluated_props,
+                    evaluated_items=evaluated_items,
+                    previous_scope_handle=scope_handle
                 ):
                     return False
                 else:
@@ -235,6 +343,12 @@ class JSONSchema:
             ):
                 return False
 
+            if (
+                "exclusiveMinimum" in self.fields
+                and instance <= self.fields["exclusiveMinimum"]
+            ):
+                return False
+
             if "multipleOf" in self.fields:
                 multiple = self.fields["multipleOf"]
                 mod = instance % multiple
@@ -242,39 +356,6 @@ class JSONSchema:
                     mod == 0 or (multiple - mod) < 0.00001
                 ):
                     return False
-
-        if isinstance(instance, list):
-            if "prefixItems" in self.fields:
-                for index, sub in enumerate(self.fields["prefixItems"]):
-                    assert isinstance(sub, JSONSchema)
-                    if index >= len(instance):
-                        break
-                    if not sub.validate(instance[index]):
-                        return False
-
-            if "items" in self.fields:
-                sub = self.fields["items"]
-                assert isinstance(sub, JSONSchema)
-                initial_index = 0
-                if "prefixItems" in self.fields:
-                    initial_index = len(self.fields["prefixItems"])
-
-                if initial_index < len(instance):
-                    for item in instance[initial_index:]:
-                        if not sub.validate(item):
-                            return False
-
-            if (
-                "minItems" in self.fields
-                and len(instance) < self.fields["minItems"]
-            ):
-                return False
-
-            if (
-                "maxItems" in self.fields
-                and len(instance) > self.fields["maxItems"]
-            ):
-                return False
 
         if isinstance(instance, str):
             if (
@@ -298,6 +379,100 @@ class JSONSchema:
             ):
                 return False
 
+        if isinstance(instance, list):
+            if (
+                "minItems" in self.fields
+                and len(instance) < self.fields["minItems"]
+            ):
+                return False
+
+            if (
+                "maxItems" in self.fields
+                and len(instance) > self.fields["maxItems"]
+            ):
+                return False
+
+            if "uniqueItems" in self.fields and self.fields["uniqueItems"]:
+                for a, b in itertools.combinations(instance, 2):
+                    if JSONSchema._compare(a, b):
+                        return False
+
+            locally_evaluated_items = set[int]()
+
+            if "prefixItems" in self.fields:
+                for index, sub in enumerate(self.fields["prefixItems"]):
+                    assert isinstance(sub, JSONSchema)
+                    if index >= len(instance):
+                        break
+                    item = instance[index]
+                    if not sub.validate(
+                        item,
+                        schema_by_uri=schema_by_uri,
+                        evaluated_items=evaluated_items,
+                        previous_scope_handle=scope_handle
+                    ):
+                        return False
+                    locally_evaluated_items.add(index)
+
+            if "items" in self.fields:
+                sub = self.fields["items"]
+                assert isinstance(sub, JSONSchema)
+                initial_index = 0
+                if "prefixItems" in self.fields:
+                    initial_index = len(self.fields["prefixItems"])
+
+                if initial_index < len(instance):
+                    for index, item in enumerate(
+                        instance[initial_index:],
+                        start=initial_index
+                    ):
+                        if not sub.validate(
+                            item,
+                            schema_by_uri=schema_by_uri,
+                            evaluated_items=evaluated_items,
+                            previous_scope_handle=scope_handle
+                        ):
+                            return False
+                        # elif item not in evaluated_items:
+                        #    locally_evaluated_items.append(item)
+                        locally_evaluated_items.add(index)
+
+            if "contains" in self.fields:
+                sub = self.fields["contains"]
+                assert isinstance(sub, JSONSchema)
+
+                min_contains: int = self.fields.get("minContains", 1)
+                max_contains: int = self.fields.get("maxContains", sys.maxsize)
+
+                count = 0
+                for index, i in enumerate(instance):
+                    if sub.validate(
+                        instance=i,
+                        schema_by_uri=schema_by_uri,
+                        previous_scope_handle=scope_handle
+                    ):
+                        count += 1
+                        locally_evaluated_items.add(index)
+
+                if count < min_contains or count > max_contains:
+                    return False
+
+            evaluated_items.update(locally_evaluated_items)
+
+            if "unevaluatedItems" in self.fields:
+                sub = self.fields["unevaluatedItems"]
+                assert isinstance(sub, JSONSchema)
+
+                for index, item in enumerate(instance):
+                    if index not in evaluated_items:
+                        if not sub.validate(
+                            instance=item,
+                            schema_by_uri=schema_by_uri,
+                            previous_scope_handle=scope_handle,
+                        ):
+                            return False
+                        evaluated_items.add(index)
+
         if isinstance(instance, dict):
             if (
                 "minProperties" in self.fields
@@ -316,6 +491,13 @@ class JSONSchema:
                     if key not in instance:
                         return False
 
+            if "dependentRequired" in self.fields:
+                for key, required in self.fields["dependentRequired"].items():
+                    if key in instance:
+                        for req in required:
+                            if req not in instance:
+                                return False
+
             if "dependentSchemas" in self.fields:
                 for prop_name, sub in self.fields["dependentSchemas"].items():
                     assert isinstance(sub, JSONSchema)
@@ -323,16 +505,32 @@ class JSONSchema:
                     if prop_name in instance:
                         valid &= sub.validate(
                             instance=instance,
-                            evaluated_properties=evaluated_properties
+                            schema_by_uri=schema_by_uri,
+                            evaluated_props=evaluated_props,
+                            previous_scope_handle=scope_handle
                         )
                     if not valid:
                         return False
 
-            locally_evaluated_properties = set[str]()
+            if "propertyNames" in self.fields:
+                sub = self.fields["propertyNames"]
+                assert isinstance(sub, JSONSchema)
+
+                for prop_name in instance.keys():
+                    if not sub.validate(
+                        instance=prop_name,
+                        schema_by_uri=schema_by_uri,
+                        previous_scope_handle=previous_scope_handle
+                    ):
+                        return False
+
+            locally_evaluated_props = set[str]()
 
             if "patternProperties" in self.fields:
                 for key in instance:
-                    for pattern, sub in self.fields["patternProperties"].items():
+                    props: dict[str, JSONSchema] \
+                        = self.fields["patternProperties"]
+                    for pattern, sub in props.items():
                         assert isinstance(sub, JSONSchema)
                         if re.search(
                             pattern=pattern,
@@ -340,10 +538,11 @@ class JSONSchema:
                         ):
                             if not sub.validate(
                                 instance=instance[key],
-                                evaluated_properties=evaluated_properties
+                                schema_by_uri=schema_by_uri,
+                                previous_scope_handle=scope_handle
                             ):
                                 return False
-                            locally_evaluated_properties.add(key)
+                            locally_evaluated_props.add(key)
 
             if "properties" in self.fields:
                 for key, sub in self.fields["properties"].items():
@@ -351,37 +550,40 @@ class JSONSchema:
                     if key in instance:
                         if not sub.validate(
                             instance=instance[key],
-                            evaluated_properties=evaluated_properties
+                            schema_by_uri=schema_by_uri,
+                            previous_scope_handle=scope_handle
                         ):
                             return False
-                        locally_evaluated_properties.add(key)
+                        locally_evaluated_props.add(key)
 
             if "additionalProperties" in self.fields:
                 sub = self.fields["additionalProperties"]
                 assert isinstance(sub, JSONSchema)
                 for key in instance:
-                    if key not in locally_evaluated_properties:
+                    if key not in locally_evaluated_props:
                         if not sub.validate(
                             instance=instance[key],
-                            evaluated_properties=evaluated_properties
+                            schema_by_uri=schema_by_uri,
+                            previous_scope_handle=scope_handle
                         ):
                             return False
-                        locally_evaluated_properties.add(key)
+                        locally_evaluated_props.add(key)
 
-            evaluated_properties.update(locally_evaluated_properties)
+            evaluated_props.update(locally_evaluated_props)
 
             if "unevaluatedProperties" in self.fields:
                 sub = self.fields["unevaluatedProperties"]
                 assert isinstance(sub, JSONSchema)
 
                 for key in instance:
-                    if key not in evaluated_properties:
+                    if key not in evaluated_props:
                         if not sub.validate(
                             instance=instance[key],
-                            evaluated_properties=evaluated_properties
+                            schema_by_uri=schema_by_uri,
+                            previous_scope_handle=scope_handle
                         ):
                             return False
-                        evaluated_properties.add(key)
+                        evaluated_props.add(key)
 
         return True
 
@@ -444,7 +646,13 @@ class JSONSchema:
         else:
             return a == b
 
-    def _reference(self, uri: str, dynamic: bool) -> "JSONSchema | None":
+    def _reference(
+        self,
+        uri: str,
+        dynamic: bool,
+        schema_by_uri: dict[str, "JSONSchema"],
+        scope_handle: ScopeHandle
+    ) -> "JSONSchema | None":
         try:
             fragment_start_index = uri.index("#")
             fragment = uri[fragment_start_index:]
@@ -452,71 +660,75 @@ class JSONSchema:
         except ValueError:
             fragment = None
 
+        merged = self.scope.schema_by_uri | schema_by_uri
+
         schema = None
 
-        if (
-            uri.startswith("http://")
-            or uri.startswith("https://")
-        ):
-            schema = JSONSchema(
-                schema=self.schema_by_uri[uri],
-                parent=self
-            )
+        if uri.startswith(("http://", "https://", "file://", "urn:")):
+            schema = merged[uri]
         elif len(uri) > 0:
-            base = self.uri
+            base = self.scope.schema.uri
             assert isinstance(base, str)
 
-            if uri.startswith("/"):
-                pass
-            else:
-                base_parts = base.split("/")
-                base = "/".join(base_parts[0:-1]) + "/"
+            delimiter = ":" if base.startswith("urn:") else "/"
+            base_parts = base.split(delimiter)
 
-            schema = JSONSchema(
-                schema=self.schema_by_uri[base + uri],
-                parent=self
-            )
+            if uri.startswith(("/", ":")):
+                base = delimiter.join(base_parts[0:3])
+            else:
+                base = delimiter.join(base_parts[0:-1]) + delimiter
+
+            schema = merged[base + uri]
         else:
-            schema = self.root
+            schema = self.scope.schema
 
         if fragment is not None:
-            schema = schema._fragment_reference(fragment, dynamic=dynamic)
+            schema = schema._fragment_reference(
+                fragment,
+                dynamic=dynamic,
+                scope_handle=ScopeHandle(
+                    current_scope=schema.scope,
+                    previous_scope_handle=scope_handle
+                )
+            )
 
         return schema
 
     def _fragment_reference(
         self,
         fragment: str,
-        dynamic: bool
+        dynamic: bool,
+        scope_handle: ScopeHandle
     ) -> "JSONSchema | None":
         assert fragment.startswith("#")
         fragment = fragment[1:]
 
         if not dynamic:
-            if fragment in self.anchors:
-                return self.anchors[fragment]
-            if fragment in self.dynamic_anchors:
-                return self.dynamic_anchors[fragment]
+            if fragment in self.scope.anchors:
+                return self.scope.anchors[fragment]
+            if fragment in self.scope.dynamic_anchors:
+                return self.scope.dynamic_anchors[fragment]
         else:
+            if (
+                fragment not in scope_handle.current_scope.dynamic_anchors
+                and fragment in scope_handle.current_scope.anchors
+            ):
+                return scope_handle.current_scope.anchors[fragment]
+
             found = None
 
-            root = self.root
-            while root is not None:
-                if fragment not in root.dynamic_anchors:
-                    break
+            sh = scope_handle
+            while sh is not None:
+                if fragment in sh.current_scope.dynamic_anchors:
+                    found = sh.current_scope.dynamic_anchors[fragment]
 
-                found = root.dynamic_anchors[fragment]
-
-                if root.parent is not None:
-                    root = root.parent.root
-                else:
-                    root = None
+                sh = sh.previous_scope_handle
 
             if found is not None:
                 return found
 
-            if fragment in self.anchors:
-                return self.anchors[fragment]
+            # if fragment in self.scope.anchors:
+            #    return self.scope.anchors[fragment]
 
         def reference0(
             path: list[str],
@@ -574,42 +786,23 @@ class JSONSchema:
         return reference0(fragment.split("/")[1:], self)
 
 
-class Validator:
+# class Validator:
 
     
-    def validate(
-        self, instance,
-        schema: dict | bool | None = None,
-        usedProperties: set[str] | None = None
-    ):
-        if schema is None:
-            schema = self.schema
-        if usedProperties is None:
-            usedProperties = set()
+#     def validate(
+#         self, instance,
+#         schema: dict | bool | None = None,
+#         usedProperties: set[str] | None = None
+#     ):
+#         if schema is None:
+#             schema = self.schema
+#         if usedProperties is None:
+#             usedProperties = set()
 
-        if schema is True:
-            return True
-        if schema is False:
-            return False
+#         if schema is True:
+#             return True
+#         if schema is False:
+#             return False
 
-        if "contains" in schema and isinstance(instance, list):
-            sch = schema["contains"]
-            for i in instance:
-                if self.validate(
-                    instance=i,
-                    schema=sch
-                ):
-                    break
-            else:
-                return False
 
-        if "enum" in schema:
-            enum: list = schema["enum"]
-            if instance not in enum:
-                return False
-            val = enum[enum.index(instance)]
-
-            if not compare(instance, val):
-                return False
-
-        return True
+#         return True

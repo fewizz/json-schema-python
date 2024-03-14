@@ -1,1 +1,1 @@
-from .validator import Validator, JSONSchema
+from .validator import JSONSchema
