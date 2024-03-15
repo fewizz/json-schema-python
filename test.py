@@ -1,7 +1,7 @@
 import json
 import jsonschema
 import os
-from jsonschema import schema_2020_12
+from jsonschema.draft_2020_12 import raw
 
 tests_files = [
     "boolean_schema",
@@ -40,17 +40,18 @@ for root, dirs, files in os.walk("tests/remotes/"):
             data = json.load(f)
             uri = f"http://localhost:1234/{base}{remote_file}"
             schema_by_uri[uri] = \
-                jsonschema.JSONSchema(schema=data, uri=uri)
+                jsonschema.Schema(schema=data, uri=uri, vocabularies=raw.META)
 
-schema_by_uri.update(schema_2020_12.schema_by_uri)
+schema_by_uri.update(raw.schema_by_uri)
 
 
 def test(data):
     for global_test in data:
         schema = global_test["schema"]
         for local_test in global_test["tests"]:
-            js = jsonschema.JSONSchema(
-                schema=schema
+            js = jsonschema.Schema(
+                schema=schema,
+                vocabularies=raw.META
             )
             result = js.validate(
                 instance=local_test["data"],

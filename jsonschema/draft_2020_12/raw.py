@@ -1,9 +1,18 @@
 # flake8: noqa
-from .validator import JSONSchema
+from ..schema import Schema
+from .core import Core
+from .applicator import Applicator
+from .unevaluated import Unevaluated
+from .validation import Validation
+
+
+META = [
+    Core, Applicator, Unevaluated, Validation
+]
 
 schema_by_uri = dict()
 
-schema_by_uri["https://json-schema.org/draft/2020-12/schema"] = JSONSchema({
+schema_by_uri["https://json-schema.org/draft/2020-12/schema"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://json-schema.org/draft/2020-12/schema",
     "$vocabulary": {
@@ -60,9 +69,9 @@ schema_by_uri["https://json-schema.org/draft/2020-12/schema"] = JSONSchema({
             "deprecated": True
         }
     }
-})
+}, vocabularies=META)
 
-schema_by_uri["https://json-schema.org/draft/2020-12/meta/core"] = JSONSchema({
+schema_by_uri["https://json-schema.org/draft/2020-12/meta/core"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://json-schema.org/draft/2020-12/meta/core",
     "$dynamicAnchor": "meta",
@@ -109,9 +118,9 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/core"] = JSONSchema({
             "format": "uri-reference"
         }
     }
-})
+}, vocabularies=META)
 
-schema_by_uri["https://json-schema.org/draft/2020-12/meta/applicator"] = JSONSchema({
+schema_by_uri["https://json-schema.org/draft/2020-12/meta/applicator"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://json-schema.org/draft/2020-12/meta/applicator",
     "$dynamicAnchor": "meta",
@@ -155,9 +164,9 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/applicator"] = JSONSch
             "items": { "$dynamicRef": "#meta" }
         }
     }
-})
+}, vocabularies=META)
 
-schema_by_uri["https://json-schema.org/draft/2020-12/meta/unevaluated"] = JSONSchema({
+schema_by_uri["https://json-schema.org/draft/2020-12/meta/unevaluated"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://json-schema.org/draft/2020-12/meta/unevaluated",
     "$dynamicAnchor": "meta",
@@ -168,9 +177,9 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/unevaluated"] = JSONSc
         "unevaluatedItems": { "$dynamicRef": "#meta" },
         "unevaluatedProperties": { "$dynamicRef": "#meta" }
     }
-})
+}, vocabularies=META)
 
-schema_by_uri["https://json-schema.org/draft/2020-12/meta/validation"] = JSONSchema({
+schema_by_uri["https://json-schema.org/draft/2020-12/meta/validation"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://json-schema.org/draft/2020-12/meta/validation",
     "$dynamicAnchor": "meta",
@@ -264,9 +273,9 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/validation"] = JSONSch
             "default": []
         }
     }
-})
+}, vocabularies=META)
 
-schema_by_uri["https://json-schema.org/draft/2020-12/meta/meta-data"] = JSONSchema({
+schema_by_uri["https://json-schema.org/draft/2020-12/meta/meta-data"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://json-schema.org/draft/2020-12/meta/meta-data",
     "$dynamicAnchor": "meta",
@@ -299,9 +308,9 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/meta-data"] = JSONSche
             "items": True
         }
     }
-})
+}, vocabularies=META)
 
-schema_by_uri["https://json-schema.org/draft/2020-12/meta/format-annotation"] = JSONSchema({
+schema_by_uri["https://json-schema.org/draft/2020-12/meta/format-annotation"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://json-schema.org/draft/2020-12/meta/format-annotation",
     "$dynamicAnchor": "meta",
@@ -311,9 +320,9 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/format-annotation"] = 
     "properties": {
         "format": { "type": "string" }
     }
-})
+}, vocabularies=META)
 
-schema_by_uri["https://json-schema.org/draft/2020-12/meta/content"] = JSONSchema({
+schema_by_uri["https://json-schema.org/draft/2020-12/meta/content"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "$id": "https://json-schema.org/draft/2020-12/meta/content",
     "$dynamicAnchor": "meta",
@@ -326,4 +335,4 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/content"] = JSONSchema
         "contentMediaType": { "type": "string" },
         "contentSchema": { "$dynamicRef": "#meta" }
     }
-})
+}, vocabularies=META)
