@@ -1,11 +1,13 @@
-from ..vocabulary import Vocabulary, Schema, LexicalScope, DynamicScope
+from ..vocabulary import (
+    Vocabulary, Schema, LexicalScope, DynamicScope
+)
 
 
 class Core(Vocabulary):
 
     @staticmethod
-    def on_schema_init(schema: Schema, raw_schema: dict):
-        if schema.parent is None or "$id" in raw_schema:
+    def on_schema_init(schema: Schema):
+        if schema.parent is None or "$id" in schema.fields:
             if schema.parent is None:
                 schema_by_uri = dict[str, Schema]()
             else:
@@ -15,8 +17,8 @@ class Core(Vocabulary):
             assert schema.parent is not None
             schema.scope = schema.parent.scope
 
-        if "$id" in raw_schema:
-            uri = raw_schema["$id"]
+        if "$id" in schema.fields:
+            uri = schema.fields["$id"]
             assert isinstance(uri, str)
 
             # TODO this is wrong
@@ -37,21 +39,28 @@ class Core(Vocabulary):
             schema.scope.schema_by_uri[uri] = schema
             schema.uri = uri
 
-        if "$anchor" in raw_schema:
-            anchor = raw_schema["$anchor"]
+        if "$anchor" in schema.fields:
+            anchor = schema.fields["$anchor"]
             schema.scope.anchors[anchor] = schema
 
-        if "$dynamicAnchor" in raw_schema:
-            anchor = raw_schema["$dynamicAnchor"]
+        if "$dynamicAnchor" in schema.fields:
+            anchor = schema.fields["$dynamicAnchor"]
             schema.scope.dynamic_anchors[anchor] = schema
 
-        if "$defs" in raw_schema:
+        if "$defs" in schema.fields:
             schema.fields["$defs"] = {
                 name: Schema(
-                    schema=sub_schema,
+                    data=sub_schema,
                     parent=schema
                 )
-                for name, sub_schema in raw_schema["$defs"].items()
+                for name, sub_schema in schema.fields["$defs"].items()
+            }
+
+        if "$vocabulary" in schema.fields:
+            schema.fields["$vocabulary"] = {
+                Vocabulary.by_uri[k]
+                for k, v in schema.fields["$vocabulary"].items()
+                if v and k in Vocabulary.by_uri
             }
 
     @staticmethod
@@ -236,3 +245,6 @@ class Core(Vocabulary):
             return None
 
         return reference0(fragment.split("/")[1:], schema)
+
+
+Vocabulary.by_uri["https://json-schema.org/draft/2020-12/vocab/core"] = Core

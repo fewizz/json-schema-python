@@ -6,14 +6,14 @@ from ..vocabulary import Vocabulary, Schema, DynamicScope
 class Applicator(Vocabulary):
 
     @staticmethod
-    def on_schema_init(schema: Schema, raw_schema: dict):
-        for k, v in raw_schema.items():
+    def on_schema_init(schema: Schema):
+        for k, v in schema.fields.items():
             if k in (
                 "items", "contains", "additionalProperties",
                 "propertyNames", "if", "then", "else", "not"
             ):
                 schema.fields[k] = Schema(
-                    schema=v,
+                    data=v,
                     parent=schema
                 )
             elif k in (
@@ -21,7 +21,7 @@ class Applicator(Vocabulary):
             ):
                 schema.fields[k] = [
                     Schema(
-                        schema=sub_schema,
+                        data=sub_schema,
                         parent=schema
                     )
                     for sub_schema in v
@@ -31,7 +31,7 @@ class Applicator(Vocabulary):
             ):
                 schema.fields[k] = {
                     name: Schema(
-                        schema=sub_schema,
+                        data=sub_schema,
                         parent=schema
                     )
                     for name, sub_schema in v.items()
@@ -265,3 +265,8 @@ class Applicator(Vocabulary):
                         locally_evaluated_props.add(key)
 
             scope.evaluated_props.update(locally_evaluated_props)
+
+
+Vocabulary.by_uri[
+    "https://json-schema.org/draft/2020-12/vocab/applicator"
+] = Applicator

@@ -1,7 +1,8 @@
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
+from copy import deepcopy
 
 if TYPE_CHECKING:
-    from .vocabulary import Vocabulary, DynamicScope
+    from .vocabulary import DynamicScope
 
 
 class LexicalScope:
@@ -19,38 +20,40 @@ class LexicalScope:
 
 class Schema:
     scope: LexicalScope
-    vocabularies: list["Vocabulary"]
 
     def __init__(
         self,
-        schema: dict | bool,
-        vocabularies: list["Vocabulary"] | None = None,
+        data: dict | bool,
+        schema: "Schema | None" = None,
         parent: "Schema | None" = None,
         uri: str | None = None
     ):
+        from .vocabulary import Vocabulary
+
         self.parent = parent
         self.uri = uri
-        self.fields = dict[str, Any]()
 
-        if vocabularies is None and parent is not None:
-            vocabularies = parent.vocabularies
+        if schema is None and parent is not None:
+            schema = parent.schema
 
-        assert vocabularies is not None
+        self.schema = schema
 
-        self.vocabularies = vocabularies
-
-        if isinstance(schema, bool):
-            if schema:
-                schema = {}
+        if isinstance(data, bool):
+            if data:
+                data = {}
             else:
-                schema = {"not": {}}
+                data = {"not": {}}
 
-        for v in self.vocabularies:
-            v.on_schema_init(schema=self, raw_schema=schema)
+        self.fields = deepcopy(data)
 
-        for k, v in schema.items():
-            if k not in self.fields:
-                self.fields[k] = v
+        if self.schema is not None:
+            for v in self.schema.fields["$vocabulary"]:
+                assert issubclass(v, Vocabulary)
+                v.on_schema_init(schema=self)
+
+            for k, v in data.items():
+                if k not in self.fields:
+                    self.fields[k] = v
 
     def validate(
         self,
@@ -58,11 +61,14 @@ class Schema:
         schema_by_uri: dict[str, "Schema"],
         prev_scope: "DynamicScope | None" = None
     ):
-        from .vocabulary import DynamicScope
+        from .vocabulary import Vocabulary, DynamicScope
 
         scope = DynamicScope(self.scope, prev_dynamic_scope=prev_scope)
 
-        for v in self.vocabularies:
+        assert self.schema is not None
+
+        for v in self.schema.fields["$vocabulary"]:
+            assert issubclass(v, Vocabulary)
             result = v.validate(
                 self,
                 instance,
@@ -77,4 +83,3 @@ class Schema:
             prev_scope.evaluated_items.update(scope.evaluated_items)
 
         return True
-

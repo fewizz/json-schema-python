@@ -6,9 +6,15 @@ from .unevaluated import Unevaluated
 from .validation import Validation
 
 
-META = [
-    Core, Applicator, Unevaluated, Validation
-]
+META = Schema(data={
+    "$vocabulary": [
+        Core,
+        Applicator,
+        Unevaluated,
+        Validation,
+    ],
+})
+
 
 schema_by_uri = dict()
 
@@ -69,7 +75,7 @@ schema_by_uri["https://json-schema.org/draft/2020-12/schema"] = Schema({
             "deprecated": True
         }
     }
-}, vocabularies=META)
+}, schema=META)
 
 schema_by_uri["https://json-schema.org/draft/2020-12/meta/core"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -118,7 +124,7 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/core"] = Schema({
             "format": "uri-reference"
         }
     }
-}, vocabularies=META)
+}, schema=META)
 
 schema_by_uri["https://json-schema.org/draft/2020-12/meta/applicator"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -164,7 +170,7 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/applicator"] = Schema(
             "items": { "$dynamicRef": "#meta" }
         }
     }
-}, vocabularies=META)
+}, schema=META)
 
 schema_by_uri["https://json-schema.org/draft/2020-12/meta/unevaluated"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -177,7 +183,7 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/unevaluated"] = Schema
         "unevaluatedItems": { "$dynamicRef": "#meta" },
         "unevaluatedProperties": { "$dynamicRef": "#meta" }
     }
-}, vocabularies=META)
+}, schema=META)
 
 schema_by_uri["https://json-schema.org/draft/2020-12/meta/validation"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -273,7 +279,7 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/validation"] = Schema(
             "default": []
         }
     }
-}, vocabularies=META)
+}, schema=META)
 
 schema_by_uri["https://json-schema.org/draft/2020-12/meta/meta-data"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -308,7 +314,7 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/meta-data"] = Schema({
             "items": True
         }
     }
-}, vocabularies=META)
+}, schema=META)
 
 schema_by_uri["https://json-schema.org/draft/2020-12/meta/format-annotation"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -320,7 +326,7 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/format-annotation"] = 
     "properties": {
         "format": { "type": "string" }
     }
-}, vocabularies=META)
+}, schema=META)
 
 schema_by_uri["https://json-schema.org/draft/2020-12/meta/content"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -335,4 +341,4 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/content"] = Schema({
         "contentMediaType": { "type": "string" },
         "contentSchema": { "$dynamicRef": "#meta" }
     }
-}, vocabularies=META)
+}, schema=META)

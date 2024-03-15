@@ -187,3 +187,8 @@ class Validation(Vocabulary):
             return True
         else:
             return a == b
+
+
+Vocabulary.by_uri[
+    "https://json-schema.org/draft/2020-12/vocab/validation"
+] = Validation

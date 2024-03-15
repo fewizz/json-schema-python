@@ -40,7 +40,7 @@ for root, dirs, files in os.walk("tests/remotes/"):
             data = json.load(f)
             uri = f"http://localhost:1234/{base}{remote_file}"
             schema_by_uri[uri] = \
-                jsonschema.Schema(schema=data, uri=uri, vocabularies=raw.META)
+                jsonschema.Schema(data=data, uri=uri, schema=raw.META)
 
 schema_by_uri.update(raw.schema_by_uri)
 
@@ -50,8 +50,8 @@ def test(data):
         schema = global_test["schema"]
         for local_test in global_test["tests"]:
             js = jsonschema.Schema(
-                schema=schema,
-                vocabularies=raw.META
+                data=schema,
+                schema=raw.META
             )
             result = js.validate(
                 instance=local_test["data"],

@@ -15,9 +15,10 @@ class DynamicScope:
 
 
 class Vocabulary:
+    by_uri = dict[str, type["Vocabulary"]]()
 
     @staticmethod
-    def on_schema_init(schema: Schema, raw_schema: dict):
+    def on_schema_init(schema: Schema):
         pass
 
     @staticmethod

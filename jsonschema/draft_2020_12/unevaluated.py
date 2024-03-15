@@ -4,16 +4,16 @@ from ..vocabulary import Vocabulary, Schema, DynamicScope
 class Unevaluated(Vocabulary):
 
     @staticmethod
-    def on_schema_init(schema: Schema, raw_schema: dict):
-        if "unevaluatedItems" in raw_schema:
+    def on_schema_init(schema: Schema):
+        if "unevaluatedItems" in schema.fields:
             schema.fields["unevaluatedItems"] = Schema(
-                schema=raw_schema["unevaluatedItems"],
+                data=schema.fields["unevaluatedItems"],
                 parent=schema
             )
 
-        if "unevaluatedProperties" in raw_schema:
+        if "unevaluatedProperties" in schema.fields:
             schema.fields["unevaluatedProperties"] = Schema(
-                schema=raw_schema["unevaluatedProperties"],
+                data=schema.fields["unevaluatedProperties"],
                 parent=schema
             )
 
@@ -57,3 +57,8 @@ class Unevaluated(Vocabulary):
                     ):
                         return False
                     scope.evaluated_props.add(key)
+
+
+Vocabulary.by_uri[
+    "https://json-schema.org/draft/2020-12/vocab/unevaluated"
+] = Unevaluated
