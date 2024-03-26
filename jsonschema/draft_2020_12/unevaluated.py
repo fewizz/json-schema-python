@@ -4,7 +4,11 @@ from ..vocabulary import Vocabulary, Schema, DynamicScope
 class Unevaluated(Vocabulary):
 
     @staticmethod
-    def on_schema_init(schema: Schema):
+    def on_schema_init(
+        schema: Schema,
+        schema_by_uri: dict[str, "Schema | dict | bool"],
+        refs: list
+    ):
         if "unevaluatedItems" in schema.fields:
             schema.fields["unevaluatedItems"] = Schema(
                 data=schema.fields["unevaluatedItems"],
@@ -21,7 +25,6 @@ class Unevaluated(Vocabulary):
     def validate(
         s: Schema,
         instance,
-        schema_by_uri: dict[str, "Schema"],
         scope: DynamicScope
     ):
         if (
@@ -35,7 +38,6 @@ class Unevaluated(Vocabulary):
                 if index not in scope.evaluated_items:
                     if not sub.validate(
                         instance=item,
-                        schema_by_uri=schema_by_uri,
                         prev_scope=scope,
                     ):
                         return False
@@ -52,7 +54,6 @@ class Unevaluated(Vocabulary):
                 if key not in scope.evaluated_props:
                     if not sub.validate(
                         instance=instance[key],
-                        schema_by_uri=schema_by_uri,
                         prev_scope=scope
                     ):
                         return False

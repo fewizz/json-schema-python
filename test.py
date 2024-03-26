@@ -2,6 +2,7 @@ import json
 import jsonschema
 import os
 from jsonschema.draft_2020_12 import raw
+import copy
 
 tests_files = [
     "boolean_schema",
@@ -39,8 +40,13 @@ for root, dirs, files in os.walk("tests/remotes/"):
         with open(f"{root}/{remote_file}") as f:
             data = json.load(f)
             uri = f"http://localhost:1234/{base}{remote_file}"
-            schema_by_uri[uri] = \
-                jsonschema.Schema(data=data, uri=uri, schema=raw.META)
+            schema_by_uri[uri] = data
+            # jsonschema.Schema(
+            # 	data=data,
+            # 	uri=uri,
+            # 	schema=raw.META,
+            # 	schema_by_uri=copy.deepcopy(schema_by_uri)
+            # )
 
 schema_by_uri.update(raw.schema_by_uri)
 
@@ -51,7 +57,7 @@ def test(data):
         for local_test in global_test["tests"]:
             js = jsonschema.Schema(
                 data=schema,
-                schema=raw.META
+                schema_by_uri=schema_by_uri
             )
             result = js.validate(
                 instance=local_test["data"],
@@ -71,48 +77,22 @@ for root, dirs, files in os.walk("tests/tests/draft2020-12"):
         with open(root + test_file) as f:
             test(json.load(f))
 
-# for test_file in tests_files:
-#     print(test_file)
 
-#     with open(f"tests/tests/draft2020-12/{test_file}.json") as f:
-#         data = json.load(f)
-#         test(data)
+v = jsonschema.Schema(
+    data={
+            "$id": "https://schema/using/no/validation",
+            "$schema": "http://localhost:1234/draft2020-12/metaschema-no-validation.json",
+            "properties": {
+                "badProperty": False,
+                "numberProperty": {
+                    "minimum": 10
+                }
+            }
+        },
+    schema_by_uri=schema_by_uri
+)
 
-
-# v = jsonschema.JSONSchema(
-#     schema={
-#             "$schema": "https://json-schema.org/draft/2020-12/schema",
-#             "$id": "https://test.json-schema.org/relative-dynamic-reference-without-bookend/root",
-#             "$dynamicAnchor": "meta",
-#             "type": "object",
-#             "properties": {
-#                 "foo": { "const": "pass" }
-#             },
-#             "$ref": "extended",
-#             "$defs": {
-#                 "extended": {
-#                     "$id": "extended",
-#                     "$anchor": "meta",
-#                     "type": "object",
-#                     "properties": {
-#                         "bar": { "$ref": "bar" }
-#                     }
-#                 },
-#                 "bar": {
-#                     "$id": "bar",
-#                     "type": "object",
-#                     "properties": {
-#                         "baz": { "$dynamicRef": "extended#meta" }
-#                     }
-#                 }
-#             }
-#         }
-# )
-
-# res = v.validate(instance={
-#                     "foo": "pass",
-#                     "bar": {
-#                         "baz": { "foo": "fail" }
-#                     }
-#                 }, schema_by_uri=schema_by_uri)
-# assert res is True
+res = v.validate(instance={
+                    "badProperty": "this property should not exist"
+                }, schema_by_uri={})
+assert res is False

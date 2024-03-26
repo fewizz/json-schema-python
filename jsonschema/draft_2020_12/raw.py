@@ -6,76 +6,20 @@ from .unevaluated import Unevaluated
 from .validation import Validation
 
 
-META = Schema(data={
-    "$vocabulary": [
-        Core,
-        Applicator,
-        Unevaluated,
-        Validation,
-    ],
-})
+META = Schema(
+    data={
+        "$vocabulary": [
+            Core,
+            Applicator,
+            Unevaluated,
+            Validation,
+        ],
+    },
+    should_not_have_meta=True
+)
 
 
 schema_by_uri = dict()
-
-schema_by_uri["https://json-schema.org/draft/2020-12/schema"] = Schema({
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "$id": "https://json-schema.org/draft/2020-12/schema",
-    "$vocabulary": {
-        "https://json-schema.org/draft/2020-12/vocab/core": True,
-        "https://json-schema.org/draft/2020-12/vocab/applicator": True,
-        "https://json-schema.org/draft/2020-12/vocab/unevaluated": True,
-        "https://json-schema.org/draft/2020-12/vocab/validation": True,
-        "https://json-schema.org/draft/2020-12/vocab/meta-data": True,
-        "https://json-schema.org/draft/2020-12/vocab/format-annotation": True,
-        "https://json-schema.org/draft/2020-12/vocab/content": True
-    },
-    "$dynamicAnchor": "meta",
-
-    "title": "Core and Validation specifications meta-schema",
-    "allOf": [
-        {"$ref": "meta/core"},
-        {"$ref": "meta/applicator"},
-        {"$ref": "meta/unevaluated"},
-        {"$ref": "meta/validation"},
-        {"$ref": "meta/meta-data"},
-        {"$ref": "meta/format-annotation"},
-        {"$ref": "meta/content"}
-    ],
-    "type": ["object", "boolean"],
-    "$comment": "This meta-schema also defines keywords that have appeared in previous drafts in order to prevent incompatible extensions as they remain in common use.",
-    "properties": {
-        "definitions": {
-            "$comment": "\"definitions\" has been replaced by \"$defs\".",
-            "type": "object",
-            "additionalProperties": { "$dynamicRef": "#meta" },
-            "deprecated": True,
-            "default": {}
-        },
-        "dependencies": {
-            "$comment": "\"dependencies\" has been split and replaced by \"dependentSchemas\" and \"dependentRequired\" in order to serve their differing semantics.",
-            "type": "object",
-            "additionalProperties": {
-                "anyOf": [
-                    { "$dynamicRef": "#meta" },
-                    { "$ref": "meta/validation#/$defs/stringArray" }
-                ]
-            },
-            "deprecated": True,
-            "default": {}
-        },
-        "$recursiveAnchor": {
-            "$comment": "\"$recursiveAnchor\" has been replaced by \"$dynamicAnchor\".",
-            "$ref": "meta/core#/$defs/anchorString",
-            "deprecated": True
-        },
-        "$recursiveRef": {
-            "$comment": "\"$recursiveRef\" has been replaced by \"$dynamicRef\".",
-            "$ref": "meta/core#/$defs/uriReferenceString",
-            "deprecated": True
-        }
-    }
-}, schema=META)
 
 schema_by_uri["https://json-schema.org/draft/2020-12/meta/core"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -124,7 +68,7 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/core"] = Schema({
             "format": "uri-reference"
         }
     }
-}, schema=META)
+}, meta_schema=META, schema_by_uri=schema_by_uri)
 
 schema_by_uri["https://json-schema.org/draft/2020-12/meta/applicator"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -170,7 +114,7 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/applicator"] = Schema(
             "items": { "$dynamicRef": "#meta" }
         }
     }
-}, schema=META)
+}, meta_schema=META, schema_by_uri=schema_by_uri)
 
 schema_by_uri["https://json-schema.org/draft/2020-12/meta/unevaluated"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -183,7 +127,7 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/unevaluated"] = Schema
         "unevaluatedItems": { "$dynamicRef": "#meta" },
         "unevaluatedProperties": { "$dynamicRef": "#meta" }
     }
-}, schema=META)
+}, meta_schema=META, schema_by_uri=schema_by_uri)
 
 schema_by_uri["https://json-schema.org/draft/2020-12/meta/validation"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -279,7 +223,7 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/validation"] = Schema(
             "default": []
         }
     }
-}, schema=META)
+}, meta_schema=META, schema_by_uri=schema_by_uri)
 
 schema_by_uri["https://json-schema.org/draft/2020-12/meta/meta-data"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -314,7 +258,7 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/meta-data"] = Schema({
             "items": True
         }
     }
-}, schema=META)
+}, meta_schema=META, schema_by_uri=schema_by_uri)
 
 schema_by_uri["https://json-schema.org/draft/2020-12/meta/format-annotation"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -326,7 +270,7 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/format-annotation"] = 
     "properties": {
         "format": { "type": "string" }
     }
-}, schema=META)
+}, meta_schema=META, schema_by_uri=schema_by_uri)
 
 schema_by_uri["https://json-schema.org/draft/2020-12/meta/content"] = Schema({
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -341,4 +285,63 @@ schema_by_uri["https://json-schema.org/draft/2020-12/meta/content"] = Schema({
         "contentMediaType": { "type": "string" },
         "contentSchema": { "$dynamicRef": "#meta" }
     }
-}, schema=META)
+}, meta_schema=META, schema_by_uri=schema_by_uri)
+
+schema_by_uri["https://json-schema.org/draft/2020-12/schema"] = Schema({
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://json-schema.org/draft/2020-12/schema",
+    "$vocabulary": {
+        "https://json-schema.org/draft/2020-12/vocab/core": True,
+        "https://json-schema.org/draft/2020-12/vocab/applicator": True,
+        "https://json-schema.org/draft/2020-12/vocab/unevaluated": True,
+        "https://json-schema.org/draft/2020-12/vocab/validation": True,
+        "https://json-schema.org/draft/2020-12/vocab/meta-data": True,
+        "https://json-schema.org/draft/2020-12/vocab/format-annotation": True,
+        "https://json-schema.org/draft/2020-12/vocab/content": True
+    },
+    "$dynamicAnchor": "meta",
+
+    "title": "Core and Validation specifications meta-schema",
+    "allOf": [
+        {"$ref": "meta/core"},
+        {"$ref": "meta/applicator"},
+        {"$ref": "meta/unevaluated"},
+        {"$ref": "meta/validation"},
+        {"$ref": "meta/meta-data"},
+        {"$ref": "meta/format-annotation"},
+        {"$ref": "meta/content"}
+    ],
+    "type": ["object", "boolean"],
+    "$comment": "This meta-schema also defines keywords that have appeared in previous drafts in order to prevent incompatible extensions as they remain in common use.",
+    "properties": {
+        "definitions": {
+            "$comment": "\"definitions\" has been replaced by \"$defs\".",
+            "type": "object",
+            "additionalProperties": { "$dynamicRef": "#meta" },
+            "deprecated": True,
+            "default": {}
+        },
+        "dependencies": {
+            "$comment": "\"dependencies\" has been split and replaced by \"dependentSchemas\" and \"dependentRequired\" in order to serve their differing semantics.",
+            "type": "object",
+            "additionalProperties": {
+                "anyOf": [
+                    { "$dynamicRef": "#meta" },
+                    { "$ref": "meta/validation#/$defs/stringArray" }
+                ]
+            },
+            "deprecated": True,
+            "default": {}
+        },
+        "$recursiveAnchor": {
+            "$comment": "\"$recursiveAnchor\" has been replaced by \"$dynamicAnchor\".",
+            "$ref": "meta/core#/$defs/anchorString",
+            "deprecated": True
+        },
+        "$recursiveRef": {
+            "$comment": "\"$recursiveRef\" has been replaced by \"$dynamicRef\".",
+            "$ref": "meta/core#/$defs/uriReferenceString",
+            "deprecated": True
+        }
+    }
+}, meta_schema=META, schema_by_uri=schema_by_uri)

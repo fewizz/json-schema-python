@@ -6,15 +6,16 @@ from ..vocabulary import (
 class Core(Vocabulary):
 
     @staticmethod
-    def on_schema_init(schema: Schema):
+    def on_schema_init(
+        schema: Schema,
+        schema_by_uri: dict[str, "Schema | dict | bool"],
+        refs: list
+    ):
         if schema.parent is None or "$id" in schema.fields:
-            if schema.parent is None:
-                schema_by_uri = dict[str, Schema]()
-            else:
-                schema_by_uri = schema.parent.scope.schema_by_uri
-            schema.scope = LexicalScope(schema, schema_by_uri=schema_by_uri)
+            schema.scope = LexicalScope(root_schema=schema)
         else:
             assert schema.parent is not None
+            assert schema.parent.scope is not None
             schema.scope = schema.parent.scope
 
         if "$id" in schema.fields:
@@ -27,7 +28,7 @@ class Core(Vocabulary):
                 p = schema.parent
                 while True:
                     assert p is not None
-                    root_uri = p.scope.schema.uri
+                    root_uri = p.scope.root_schema.uri
                     if root_uri is not None and root_uri.startswith(schemas):
                         break
                     p = p.parent
@@ -36,7 +37,7 @@ class Core(Vocabulary):
                 uri_parts = root_uri.split(delimiter)
                 uri = delimiter.join(uri_parts[0:-1]) + delimiter + uri
 
-            schema.scope.schema_by_uri[uri] = schema
+            schema_by_uri[uri] = schema
             schema.uri = uri
 
         if "$anchor" in schema.fields:
@@ -51,7 +52,9 @@ class Core(Vocabulary):
             schema.fields["$defs"] = {
                 name: Schema(
                     data=sub_schema,
-                    parent=schema
+                    parent=schema,
+                    refs=refs,
+                    schema_by_uri=schema_by_uri
                 )
                 for name, sub_schema in schema.fields["$defs"].items()
             }
@@ -63,43 +66,75 @@ class Core(Vocabulary):
                 if v and k in Vocabulary.by_uri
             }
 
+    # @staticmethod
+    # def on_schema_post_init(
+    #     schema: Schema,
+    #    schema_by_uri: dict[str, "Schema | dict | bool"]
+    # ):
+        if "$ref" in schema.fields:
+            def f():
+                uri = schema.fields["$ref"]
+                ref = Core._reference(
+                    schema,
+                    uri,
+                    schema_by_uri=schema_by_uri
+                )
+                assert isinstance(ref, Schema)
+                schema.fields["$ref"] = ref
+
+            refs.append(f)
+
+        if "$dynamicRef" in schema.fields:
+            def f():
+                uri = schema.fields["$dynamicRef"]
+                try:
+                    fragment_start_index = uri.index("#")
+                    fragment = uri[fragment_start_index:]
+                    # uri = uri[0:fragment_start_index]
+                except ValueError:
+                    fragment = None
+
+                ref = Core._reference(
+                    schema,
+                    uri,
+                    schema_by_uri=schema_by_uri
+                )
+
+                schema.fields["$dynamicRef"] = (ref, fragment)
+            refs.append(f)
+
     @staticmethod
     def validate(
         s: Schema,
         instance,
-        schema_by_uri: dict[str, "Schema"],
         scope: DynamicScope
     ):
         if "$ref" in s.fields:
-            uri = s.fields["$ref"]
-            ref = Core._reference(
-                s,
-                uri,
-                schema_by_uri=schema_by_uri,
-                dynamic=False,
-                scope=scope
-            )
+            ref = s.fields["$ref"]
             assert isinstance(ref, Schema)
             if not ref.validate(
                 instance=instance,
-                schema_by_uri=schema_by_uri,
                 prev_scope=scope
             ):
                 return False
 
         if "$dynamicRef" in s.fields:
-            uri = s.fields["$dynamicRef"]
-            ref = Core._reference(
-                s,
-                uri,
-                schema_by_uri=schema_by_uri,
-                dynamic=True,
-                scope=scope
-            )
+            ref, fragment = s.fields["$dynamicRef"]
+
+            if fragment is not None:
+                ref_0 = Core._fragment_reference(
+                    s,
+                    fragment,
+                    dynamic_scope=scope
+                )
+                if ref_0 is not None:
+                    assert isinstance(ref_0, Schema)
+                    ref = ref_0
+
             assert isinstance(ref, Schema)
+
             if not ref.validate(
                 instance=instance,
-                schema_by_uri=schema_by_uri,
                 prev_scope=scope
             ):
                 return False
@@ -108,9 +143,8 @@ class Core(Vocabulary):
     def _reference(
         schema: Schema,
         uri: str,
-        dynamic: bool,
-        schema_by_uri: dict[str, "Schema"],
-        scope: DynamicScope
+        schema_by_uri: dict[str, "Schema | dict| bool"],
+        scope: DynamicScope | None = None
     ) -> "Schema | None":
         try:
             fragment_start_index = uri.index("#")
@@ -119,14 +153,12 @@ class Core(Vocabulary):
         except ValueError:
             fragment = None
 
-        merged = schema.scope.schema_by_uri | schema_by_uri
-
         next_schema = None
 
         if uri.startswith(("http://", "https://", "file://", "urn:")):
-            next_schema = merged[uri]
+            next_schema = schema_by_uri[uri]
         elif len(uri) > 0:
-            base = schema.scope.schema.uri
+            base = schema.scope.root_schema.uri
             assert isinstance(base, str)
 
             delimiter = ":" if base.startswith("urn:") else "/"
@@ -136,20 +168,34 @@ class Core(Vocabulary):
                 base = delimiter.join(base_parts[0:3])
             else:
                 base = delimiter.join(base_parts[0:-1]) + delimiter
-
-            next_schema = merged[base + uri]
+            uri = base + uri
+            next_schema = schema_by_uri[uri]
         else:
-            next_schema = schema.scope.schema
+            next_schema = schema.scope.root_schema
+
+        if not isinstance(next_schema, Schema):
+            if uri == schema.uri:
+                next_schema = schema
+            else:
+                next_schema = Schema(
+                    data=next_schema,
+                    uri=uri,
+                    schema_by_uri=schema_by_uri
+                )
+                schema_by_uri[uri] = next_schema
 
         if fragment is not None:
+            scope_0 = None
+            if scope is not None:
+                scope_0 = DynamicScope(
+                    current_lexical_scope=next_schema.scope,
+                    prev_dynamic_scope=scope
+                )
+
             next_schema = Core._fragment_reference(
                 next_schema,
                 fragment,
-                dynamic=dynamic,
-                scope=DynamicScope(
-                    current_scope=next_schema.scope,
-                    prev_dynamic_scope=scope
-                )
+                dynamic_scope=scope_0
             )
 
         return next_schema
@@ -158,35 +204,38 @@ class Core(Vocabulary):
     def _fragment_reference(
         schema: Schema,
         fragment: str,
-        dynamic: bool,
-        scope: DynamicScope
+        dynamic_scope: DynamicScope | None = None,
     ) -> "Schema | None":
         assert fragment.startswith("#")
         fragment = fragment[1:]
 
-        if not dynamic:
+        if dynamic_scope is None:
             if fragment in schema.scope.anchors:
                 return schema.scope.anchors[fragment]
             if fragment in schema.scope.dynamic_anchors:
                 return schema.scope.dynamic_anchors[fragment]
         else:
-            if (
-                fragment not in scope.scope.dynamic_anchors
-                and fragment in scope.scope.anchors
-            ):
-                return scope.scope.anchors[fragment]
+            # if fragment not in dynamic_scope.lexical_scope.dynamic_anchors:
+            #    return None
+            # if (
+            #     fragment not in scope.scope.dynamic_anchors
+            #    and fragment in scope.scope.anchors
+            # ):
+            #    return scope.scope.anchors[fragment]
 
             found = None
 
-            sh = scope
+            sh = dynamic_scope
             while sh is not None:
-                if fragment in sh.scope.dynamic_anchors:
-                    found = sh.scope.dynamic_anchors[fragment]
+                if fragment in sh.lexical_scope.anchors and found is None:
+                    return sh.lexical_scope.anchors[fragment]
 
-                sh = sh.prev_dynamic_handle
+                if fragment in sh.lexical_scope.dynamic_anchors:
+                    found = sh.lexical_scope.dynamic_anchors[fragment]
 
-            if found is not None:
-                return found
+                sh = sh.prev_dynamic_scope
+
+            return found
 
             # if fragment in self.scope.anchors:
             #    return self.scope.anchors[fragment]

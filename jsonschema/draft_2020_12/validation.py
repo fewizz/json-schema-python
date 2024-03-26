@@ -11,7 +11,6 @@ class Validation(Vocabulary):
     def validate(
         s: Schema,
         instance,
-        schema_by_uri: dict[str, "Schema"],
         scope: DynamicScope
     ):
         if "type" in s.fields:

@@ -9,13 +9,11 @@ class LexicalScope:
 
     def __init__(
         self,
-        schema: "Schema",
-        schema_by_uri: dict[str, "Schema"]
+        root_schema: "Schema"
     ):
-        self.schema = schema
+        self.root_schema = root_schema
         self.anchors = dict[str, "Schema"]()
         self.dynamic_anchors = dict[str, "Schema"]()
-        self.schema_by_uri = schema_by_uri
 
 
 class Schema:
@@ -24,19 +22,15 @@ class Schema:
     def __init__(
         self,
         data: dict | bool,
-        schema: "Schema | None" = None,
+        meta_schema: "Schema | None" = None,
+        should_not_have_meta=False,
         parent: "Schema | None" = None,
-        uri: str | None = None
+        uri: str | None = None,
+        schema_by_uri: dict[str, "Schema | dict | bool"] | None = None,
+        refs: list | None = None
     ):
-        from .vocabulary import Vocabulary
-
-        self.parent = parent
-        self.uri = uri
-
-        if schema is None and parent is not None:
-            schema = parent.schema
-
-        self.schema = schema
+        if schema_by_uri is None:
+            schema_by_uri = dict()
 
         if isinstance(data, bool):
             if data:
@@ -44,35 +38,69 @@ class Schema:
             else:
                 data = {"not": {}}
 
+        from .vocabulary import Vocabulary
+
+        self.parent = parent
+        self.uri = uri
+
+        if meta_schema is None:
+            if should_not_have_meta:
+                pass
+            elif "$schema" in data:
+                _meta_uri = data["$schema"]
+                _meta_schema = schema_by_uri[_meta_uri]
+                if not isinstance(_meta_schema, Schema):
+                    _meta_schema = Schema(
+                        _meta_schema,
+                        uri=_meta_uri,
+                        schema_by_uri=schema_by_uri
+                    )
+                meta_schema = _meta_schema
+            elif parent is not None:
+                meta_schema = parent.meta_schema
+            else:
+                from .draft_2020_12 import raw
+                meta_schema = raw.META
+
+        self.meta_schema = meta_schema
+
         self.fields = deepcopy(data)
 
-        if self.schema is not None:
-            for v in self.schema.fields["$vocabulary"]:
-                assert issubclass(v, Vocabulary)
-                v.on_schema_init(schema=self)
+        if self.meta_schema is not None:
+            if refs is None:
+                post = True
+                refs = list()
+            else:
+                post = False
 
-            for k, v in data.items():
-                if k not in self.fields:
-                    self.fields[k] = v
+            for v in self.meta_schema.fields["$vocabulary"]:
+                assert issubclass(v, Vocabulary)
+                v.on_schema_init(
+                    schema=self,
+                    schema_by_uri=schema_by_uri,
+                    refs=refs
+                )
+
+            if post:
+                for r in refs:
+                    r()
 
     def validate(
         self,
         instance,
-        schema_by_uri: dict[str, "Schema"],
         prev_scope: "DynamicScope | None" = None
     ):
         from .vocabulary import Vocabulary, DynamicScope
 
         scope = DynamicScope(self.scope, prev_dynamic_scope=prev_scope)
 
-        assert self.schema is not None
+        assert self.meta_schema is not None
 
-        for v in self.schema.fields["$vocabulary"]:
+        for v in self.meta_schema.fields["$vocabulary"]:
             assert issubclass(v, Vocabulary)
             result = v.validate(
                 self,
                 instance,
-                schema_by_uri,
                 scope
             )
             if result is False:

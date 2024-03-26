@@ -6,7 +6,11 @@ from ..vocabulary import Vocabulary, Schema, DynamicScope
 class Applicator(Vocabulary):
 
     @staticmethod
-    def on_schema_init(schema: Schema):
+    def on_schema_init(
+        schema: Schema,
+        schema_by_uri: dict[str, "Schema | dict | bool"],
+        refs: list
+    ):
         for k, v in schema.fields.items():
             if k in (
                 "items", "contains", "additionalProperties",
@@ -14,7 +18,9 @@ class Applicator(Vocabulary):
             ):
                 schema.fields[k] = Schema(
                     data=v,
-                    parent=schema
+                    parent=schema,
+                    schema_by_uri=schema_by_uri,
+                    refs=refs
                 )
             elif k in (
                 "prefixItems", "allOf", "anyOf", "oneOf"
@@ -22,7 +28,9 @@ class Applicator(Vocabulary):
                 schema.fields[k] = [
                     Schema(
                         data=sub_schema,
-                        parent=schema
+                        parent=schema,
+                        schema_by_uri=schema_by_uri,
+                        refs=refs
                     )
                     for sub_schema in v
                 ]
@@ -32,7 +40,9 @@ class Applicator(Vocabulary):
                 schema.fields[k] = {
                     name: Schema(
                         data=sub_schema,
-                        parent=schema
+                        parent=schema,
+                        schema_by_uri=schema_by_uri,
+                        refs=refs
                     )
                     for name, sub_schema in v.items()
                 }
@@ -41,7 +51,6 @@ class Applicator(Vocabulary):
     def validate(
         s: Schema,
         instance,
-        schema_by_uri: dict[str, "Schema"],
         scope: DynamicScope
     ):
         if "not" in s.fields:
@@ -49,7 +58,6 @@ class Applicator(Vocabulary):
             assert isinstance(sub, Schema)
             if sub.validate(
                 instance,
-                schema_by_uri=schema_by_uri,
                 prev_scope=scope
             ):
                 return False
@@ -61,7 +69,6 @@ class Applicator(Vocabulary):
                 # locally_evaluated_properties_0 = set[str]()
                 if sub.validate(
                     instance=instance,
-                    schema_by_uri=schema_by_uri,
                     prev_scope=scope
                 ):
                     count += 1
@@ -75,7 +82,6 @@ class Applicator(Vocabulary):
                 # locally_evaluated_properties_0 = set[str]()
                 if sub.validate(
                     instance=instance,
-                    schema_by_uri=schema_by_uri,
                     prev_scope=scope
                 ):
                     count += 1
@@ -90,7 +96,6 @@ class Applicator(Vocabulary):
                 # locally_evaluated_properties = set[str]()
                 if sub.validate(
                     instance=instance,
-                    schema_by_uri=schema_by_uri,
                     prev_scope=scope
                 ):
                     count += 1
@@ -103,7 +108,6 @@ class Applicator(Vocabulary):
             assert isinstance(sub, Schema)
             result = sub.validate(
                 instance=instance,
-                schema_by_uri=schema_by_uri,
                 prev_scope=scope
             )
             if result and "then" in s.fields:
@@ -111,7 +115,6 @@ class Applicator(Vocabulary):
                 assert isinstance(sub, Schema)
                 if not sub.validate(
                     instance=instance,
-                    schema_by_uri=schema_by_uri,
                     prev_scope=scope
                 ):
                     return False
@@ -122,7 +125,6 @@ class Applicator(Vocabulary):
                 assert isinstance(sub, Schema)
                 if not sub.validate(
                     instance=instance,
-                    schema_by_uri=schema_by_uri,
                     prev_scope=scope
                 ):
                     return False
@@ -140,7 +142,6 @@ class Applicator(Vocabulary):
                     item = instance[index]
                     if not sub.validate(
                         item,
-                        schema_by_uri=schema_by_uri,
                         prev_scope=scope
                     ):
                         return False
@@ -160,7 +161,6 @@ class Applicator(Vocabulary):
                     ):
                         if not sub.validate(
                             item,
-                            schema_by_uri=schema_by_uri,
                             prev_scope=scope
                         ):
                             return False
@@ -181,7 +181,6 @@ class Applicator(Vocabulary):
                 for index, i in enumerate(instance):
                     if sub.validate(
                         instance=i,
-                        schema_by_uri=schema_by_uri,
                         prev_scope=scope
                     ):
                         count += 1
@@ -200,7 +199,6 @@ class Applicator(Vocabulary):
                 for prop_name in instance.keys():
                     if not sub.validate(
                         instance=prop_name,
-                        schema_by_uri=schema_by_uri,
                         prev_scope=scope
                     ):
                         return False
@@ -213,7 +211,6 @@ class Applicator(Vocabulary):
                     if prop_name in instance:
                         valid &= sub.validate(
                             instance=instance,
-                            schema_by_uri=schema_by_uri,
                             prev_scope=scope
                         )
                     if not valid:
@@ -233,7 +230,6 @@ class Applicator(Vocabulary):
                         ):
                             if not sub.validate(
                                 instance=instance[key],
-                                schema_by_uri=schema_by_uri,
                                 prev_scope=scope
                             ):
                                 return False
@@ -245,7 +241,6 @@ class Applicator(Vocabulary):
                     if key in instance:
                         if not sub.validate(
                             instance=instance[key],
-                            schema_by_uri=schema_by_uri,
                             prev_scope=scope
                         ):
                             return False
@@ -258,7 +253,6 @@ class Applicator(Vocabulary):
                     if key not in locally_evaluated_props:
                         if not sub.validate(
                             instance=instance[key],
-                            schema_by_uri=schema_by_uri,
                             prev_scope=scope
                         ):
                             return False
